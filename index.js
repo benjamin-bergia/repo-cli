@@ -6,6 +6,10 @@ const { highlight } = require('cli-highlight');
 const yaml = require('yaml');
 const gitRoot = require('git-root');
 const path = require('path');
+const fs = require('fs');
+
+
+const repoRoot = gitRoot();
 
 
 const program = new Command();
@@ -38,14 +42,31 @@ build
 
 const create = program.command('create');
 create
-  .command('app')
-  .action(() => {
-    console.log('app');
+  .command('app <app> [namespaces...]')
+  .description('Create a new application')
+  .action((app, namespaces) => {
+    const appDirectory = path.join(repoRoot, app);
+
+    fs.mkdirSync(appDirectory);
+    fs.mkdirSync(path.join(appDirectory, 'base'));
+    fs.mkdirSync(path.join(appDirectory, 'overlays'));
+    fs.mkdirSync(path.join(appDirectory, 'environments'));
+
+    fs.writeFileSync(
+      path.join(appDirectory, 'base', 'kustomization.yml'),
+      yamlKustomization().toString()
+    );
+
+    if (namespaces) {
+      namespaces.forEach((namespace) => {
+        appNamespace(app, namespace);
+      });
+    };
   });
 
 create
   .command('secret <name> [entries...]')
-  .description('Output a new secreti')
+  .description('Output a new secret')
   .option('-ns, --namespace <namespace>', 'Which namespace')
   .action((name, entries, options) => {
     const { namespace } = options.opts();
@@ -67,7 +88,6 @@ create
       namespace,
       application
     } = options.opts();
-    const repoRoot = gitRoot();
     const certificate = path.join(
       repoRoot,
       '/utils/certs/sealedsecret/',
@@ -103,13 +123,61 @@ create
     kubeseal.stdin.end();
   });
 
+
+const update = program.command('update');
+
+update
+  .command('app <name>')
+  .requiredOption(
+    '--add-namespaces <namespaces...>',
+    'Add new namespaces to an existing app'
+  )
+  .action((app, cmd) => {
+    const { addNamespaces } = cmd.opts();
+
+    addNamespaces.forEach((namespace) => {
+      appNamespace(app, namespace);
+    });
+  });
+
+
 program.parse(process.argv);
 
 
+function appNamespace(app, namespace) {
+  const directory = path.join(
+    repoRoot,
+    app,
+    'environments',
+    namespace
+  );
+
+  fs.mkdirSync(directory);
+  fs.mkdirSync(path.join(directory, 'sealedsecrets'));
+
+  const kustomization = yamlKustomization();
+  kustomization.contents['namespace'] = namespace;
+  kustomization.contents['commonLabels'] = {
+    'app.kubernetes.io/part-of': app
+  };
+  kustomization.contents['configMapGenerator'] = [
+    { name: `${app}-globals`,
+      options: { disableNameSuffixHash: true },
+      literals: []
+    }
+  ];
+
+  fs.writeFileSync(
+    path.join(directory, 'kustomization.yml'),
+    kustomization.toString()
+  );
+};
+
+
 function yamlSecret(name, entries, namespace) {
-  const secret = new yaml.Document();
-  secret.directivesEndMarker = true;
-  secret.contents = {
+  const document = new yaml.Document();
+  document.directivesEndMarker = true;
+  document.contents = {
     apiVersion: 'v1',
     kind: 'Secret',
     metadata: {
@@ -120,16 +188,30 @@ function yamlSecret(name, entries, namespace) {
   };
 
   if (namespace) {
-    secret.contents.metadata['namespace'] = namespace;
+    document.contents.metadata['namespace'] = namespace;
   }
 
   if (entries) {
     entries.forEach((entry) => {
       let [key, value] = entry.split('=');
 
-      secret.contents.data[key] = Buffer.from(value).toString('base64');
+      document.contents.data[key] = Buffer.from(value).toString('base64');
     });
   };
 
-  return secret;
+  return document;
 };
+
+function yamlKustomization() {
+  const document = new yaml.Document();
+  document.directivesEndMarker = true;
+  document.contents = {
+    apiVersion: 'kustomize.config.k8s.io/v1beta1',
+    kind: 'Kustomization',
+    resources: []
+  };
+
+  return document;
+};
+
+
