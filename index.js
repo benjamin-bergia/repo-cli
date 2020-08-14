@@ -7,6 +7,8 @@ const yaml = require('yaml');
 const gitRoot = require('git-root');
 const path = require('path');
 const fs = require('fs');
+const { Secret } = require('./secret.js');
+const { Kustomization } = require('./kustomization.js');
 
 
 const repoRoot = gitRoot();
@@ -52,9 +54,10 @@ create
     fs.mkdirSync(path.join(appDirectory, 'overlays'));
     fs.mkdirSync(path.join(appDirectory, 'environments'));
 
+    const kustomization = new Kustomization()
     fs.writeFileSync(
       path.join(appDirectory, 'base', 'kustomization.yml'),
-      yamlKustomization().toString()
+      kustomization.toString()
     );
 
     if (namespaces) {
@@ -70,7 +73,7 @@ create
   .option('-ns, --namespace <namespace>', 'Which namespace')
   .action((name, entries, options) => {
     const { namespace } = options.opts();
-    const secret = yamlSecret(name, entries, namespace);
+    const secret = new Secret(name, entries, namespace);
     console.log(highlight(secret.toString(), 'yaml'));
   });
 
@@ -94,7 +97,7 @@ create
       `${environment}.pem`
     );
 
-    const secret = yamlSecret(name, entries);
+    const secret = new Secret(name, entries);
 
     const kubeseal = spawn('kubeseal', [
       '--cert', certificate,
@@ -155,63 +158,20 @@ function appNamespace(app, namespace) {
   fs.mkdirSync(directory);
   fs.mkdirSync(path.join(directory, 'sealedsecrets'));
 
-  const kustomization = yamlKustomization();
-  kustomization.contents['namespace'] = namespace;
-  kustomization.contents['commonLabels'] = {
-    'app.kubernetes.io/part-of': app
-  };
-  kustomization.contents['configMapGenerator'] = [
-    { name: `${app}-globals`,
+  const kustomization = new Kustomization({
+    namespace: namespace,
+    commonLabels: {
+      'app.kubernetes.io/part-of': app
+    },
+    configMapGenerator: {
+      name: `${app}-globals`,
       options: { disableNameSuffixHash: true },
       literals: []
     }
-  ];
+  });
 
   fs.writeFileSync(
     path.join(directory, 'kustomization.yml'),
     kustomization.toString()
   );
 };
-
-
-function yamlSecret(name, entries, namespace) {
-  const document = new yaml.Document();
-  document.directivesEndMarker = true;
-  document.contents = {
-    apiVersion: 'v1',
-    kind: 'Secret',
-    metadata: {
-      name: name,
-    },
-    type: 'Opaque',
-    data: {}
-  };
-
-  if (namespace) {
-    document.contents.metadata['namespace'] = namespace;
-  }
-
-  if (entries) {
-    entries.forEach((entry) => {
-      let [key, value] = entry.split('=');
-
-      document.contents.data[key] = Buffer.from(value).toString('base64');
-    });
-  };
-
-  return document;
-};
-
-function yamlKustomization() {
-  const document = new yaml.Document();
-  document.directivesEndMarker = true;
-  document.contents = {
-    apiVersion: 'kustomize.config.k8s.io/v1beta1',
-    kind: 'Kustomization',
-    resources: []
-  };
-
-  return document;
-};
-
-
