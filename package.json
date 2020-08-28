@@ -15,6 +15,8 @@
     "cli-highlight": "^2.1.4",
     "commander": "^6.0.0",
     "git-root": "^1.0.0",
-    "yaml": "^1.10.0"
-  }
+    "prompt": "^1.0.0",
+    "yaml": "^2.0.0-0"
+  },
+  "devDependencies": {}
 }

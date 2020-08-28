@@ -1,10 +1,8 @@
 const { Document } = require('yaml');
 
 class Secret extends Document {
-  constructor(name, entries, namespace) {
-    super();
-    this.directivesEndMarker = true;
-    this.contents = {
+  constructor(name, entries) {
+    let content = {
       apiVersion: 'v1',
       kind: 'Secret',
       metadata: {
@@ -14,17 +12,17 @@ class Secret extends Document {
       data: {}
     };
 
-    if (namespace) {
-      this.contents.metadata['namespace'] = namespace;
-    };
-
     if (entries) {
       entries.forEach((entry) => {
-        let [key, value] = entry.split('=');
+        const [key, value] = entry.split('=');
+        const b64value = Buffer.from(value).toString('base64');
 
-        this.contents.data[key] = Buffer.from(value).toString('base64');
+        content.data[key] = b64value;
       });
     };
+
+    super(content);
+    this.directivesEndMarker = true;
   };
 };
 

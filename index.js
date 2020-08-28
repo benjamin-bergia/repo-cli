@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn } = require('child_process');
+const { spawnSync } = require('child_process');
 const { Command } = require('commander');
 const { highlight } = require('cli-highlight');
 const yaml = require('yaml');
@@ -8,7 +8,9 @@ const gitRoot = require('git-root');
 const path = require('path');
 const fs = require('fs');
 const { Secret } = require('./secret.js');
+const { SealedSecret } = require('./sealedsecret.js');
 const { Kustomization } = require('./kustomization.js');
+const { KubeConfig } = require('./kube-config.js');
 
 
 const repoRoot = gitRoot();
@@ -21,25 +23,21 @@ const build = program.command('build <directory>');
 build
   .description('Build a specific directoy')
   .action((directory) => {
-    const kustomize = spawn('kustomize', ['build', directory]);
+    const k = spawnSync(
+      'kustomize',
+      ['build', directory]);
 
-    let output = '';
+    if (k.status != 0) {
+      const error =  k.stderr.toString();
+      console.log(error);
+      return process.exit(1);
 
-    kustomize.stdout.on('data', (data) => {
-      output += data;
-    });
-
-    kustomize.stderr.on('data', (data) => {
-      output += data;
-    });
-
-    kustomize.on('error', (error) => {
-      console.log(error.message);
-    });
-
-    kustomize.on('close', () => {
-      console.log(highlight(`${output}`, 'yaml'));
-    });
+    } else {
+      const output = k.stdout.toString();
+      console.log(
+        highlight(`${output}`, 'yaml')
+      );
+    };
   });
 
 const create = program.command('create');
@@ -83,47 +81,33 @@ create
   .requiredOption('-n, --name <name>', 'The sealedsecret name')
   .requiredOption('-ns, --namespace <namespace>', 'Which namespace')
   .requiredOption('-a, --application <application>', 'Which ArgoCD application')
-  .requiredOption('-e, --environment <environment>', 'Which environment/cluster')
+  .requiredOption('-c, --cluster <cluster>', 'Which cluster')
   .action((entries, options) => {
     const { 
-      environment,
+      cluster,
       name,
       namespace,
       application
     } = options.opts();
-    const certificate = path.join(
-      repoRoot,
-      '/utils/certs/sealedsecret/',
-      `${environment}.pem`
+      const sealedsecret = new SealedSecret(
+        name, namespace, cluster, entries
+      );
+
+      console.log(
+        highlight(sealedsecret.toString(), 'yaml')
+      );
+  });
+
+
+create
+  .command('kube-config <tokens...>')
+  .description('Output a new kube/config file.')
+  .action((tokens) => {
+    const config = new KubeConfig(tokens);
+
+    console.log(
+      highlight(config.toString(), 'yaml')
     );
-
-    const secret = new Secret(name, entries);
-
-    const kubeseal = spawn('kubeseal', [
-      '--cert', certificate,
-      '--format', 'yaml',
-      '--namespace', namespace
-    ]);
-    kubeseal.stdin.write(secret.toString());
-
-    let output = '';
-    kubeseal.stdout.on('data', (data) => {
-      output += data;
-    });
-
-    kubeseal.stderr.on('data', (data) => {
-      output += data;
-    });
-
-    kubeseal.on('error', (error) => {
-      console.log(error.message);
-    });
-
-    kubeseal.on('close', () => {
-      console.log(highlight(`${output}`, 'yaml'));
-    });
-
-    kubeseal.stdin.end();
   });
 
 
@@ -141,6 +125,20 @@ update
     addNamespaces.forEach((namespace) => {
       appNamespace(app, namespace);
     });
+  });
+
+update
+  .command('sealedsecret <cluster> <file> <entries...>')
+  .action((cluster, file, entries) => {
+    const update = new Secret('update', entries);
+
+    const output = kubeseal(
+      cluster,
+      update.toString(),
+      ['--merge-into', file]
+    ); 
+
+    console.log(`${file} has been updated.`);
   });
 
 
@@ -174,4 +172,34 @@ function appNamespace(app, namespace) {
     path.join(directory, 'kustomization.yml'),
     kustomization.toString()
   );
+};
+
+
+function run(cmd, args, options) {
+    const ks = spawnSync(
+      cmd,
+      args,
+      options
+    );
+
+    if (ks.status != 0) {
+      const error =  k.stderr.toString();
+      console.log(error);
+      return process.exit(1);
+
+    } else {
+      const output = ks.stdout.toString();
+       return `${output}`;
+    };
+};
+
+function kubeseal(cluster, input, args) {
+  const certificate = `../kubernetes/utils/certs/sealedsecret/${cluster}.pem`;
+
+  run('kubeseal',
+      [ '--cert', certificate,
+        '--format', 'yaml'
+      ].concat(args),
+      {input: input}
+  ); 
 };
